@@ -1,0 +1,20 @@
+# PlatformIO & Embedded build output
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Editor / IDE settings
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# Compiled binaries
+*.bin
+*.elf
+*.hex
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini

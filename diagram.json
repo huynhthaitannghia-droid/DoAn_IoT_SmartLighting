@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "author": "Huynh Thai Tan Nghia - Nhom 15",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 20,
+      "left": -20,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-led-ring",
+      "id": "ring",
+      "top": 20,
+      "left": 180,
+      "attrs": { "pixels": "16" }
+    },
+    {
+      "type": "wokwi-photoresistor-sensor",
+      "id": "ldr",
+      "top": 220,
+      "left": 180,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_gesture",
+      "top": 240,
+      "left": -10,
+      "attrs": { "color": "green", "label": "Gesture (Tap)" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+    [ "esp:VIN", "ring:VCC", "red", [ "v35", "h240" ] ],
+    [ "esp:GND.1", "ring:GND", "black", [ "h30", "v-55" ] ],
+    [ "esp:D18", "ring:DIN", "green", [ "h0" ] ],
+    [ "esp:3V3", "ldr:VCC", "red", [ "h40", "v30" ] ],
+    [ "esp:GND.1", "ldr:GND", "black", [ "h20", "v55" ] ],
+    [ "esp:D34", "ldr:AO", "gold", [ "v-30", "h260" ] ],
+    [ "esp:GND.2", "btn_gesture:1.l", "black", [ "h-10" ] ],
+    [ "esp:D12", "btn_gesture:2.l", "blue", [ "h-20" ] ]
+  ],
+  "dependencies": {}
+}

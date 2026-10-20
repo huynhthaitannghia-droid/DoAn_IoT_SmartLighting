@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Đèn Thông Minh IoT - Nhóm 15</title>
+    <!-- Thư viện MQTT WebSocket -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- Thư viện Google MediaPipe Hands cho AI Camera -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --primary: #4361ee;
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #f8fafc;
+            --text-dim: #94a3b8;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 15px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 18px;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            color: #38bdf8;
+            margin-bottom: 4px;
+        }
+
+        header p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 16px;
+            background: #334155;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-top: 8px;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--danger);
+        }
+
+        .dot.connected {
+            background: var(--success);
+            box-shadow: 0 0 10px var(--success);
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: 16px;
+            padding: 18px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .card h2 {
+            font-size: 1.15rem;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Vùng hiển thị bóng đèn ảo */
+        .lamp-preview {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 15px 0;
+        }
+
+        .bulb {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: #475569;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        .bulb svg {
+            width: 50px;
+            height: 50px;
+            fill: #94a3b8;
+            transition: all 0.3s;
+        }
+
+        .bulb.on {
+            background: #ffb703;
+            box-shadow: 0 0 35px #ffb703, 0 0 70px rgba(255, 183, 3, 0.4);
+        }
+
+        .bulb.on svg {
+            fill: #ffffff;
+        }
+
+        .state-text {
+            margin-top: 10px;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .priority-info {
+            background: #0f172a;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid #334155;
+        }
+
+        .priority-tag {
+            background: #3b82f6;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.92rem;
+        }
+
+        button:active {
+            transform: scale(0.97);
+        }
+
+        .btn-on { background: var(--success); color: white; }
+        .btn-off { background: var(--danger); color: white; }
+        .btn-voice {
+            background: #8b5cf6;
+            color: white;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-voice.listening {
+            background: #ec4899;
+            animation: pulse 1.5s infinite;
+        }
+
+        .btn-cam {
+            background: #0284c7;
+            color: white;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-cam.active {
+            background: #ef4444;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0.7); }
+            70% { box-shadow: 0 0 0 15px rgba(236, 72, 153, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(236, 72, 153, 0); }
+        }
+
+        .control-row {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .control-row label {
+            font-size: 0.88rem;
+            color: var(--text-dim);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: #334155;
+            outline: none;
+            accent-color: #38bdf8;
+        }
+
+        /* Bảng chọn màu RGB tùy chỉnh */
+        .color-picker-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #0f172a;
+            padding: 8px 12px;
+            border-radius: 10px;
+            border: 1px solid #334155;
+        }
+
+        input[type="color"] {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            width: 42px;
+            height: 42px;
+            border: none;
+            cursor: pointer;
+            background: none;
+            border-radius: 8px;
+            padding: 0;
+        }
+
+        input[type="color"]::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+
+        input[type="color"]::-webkit-color-swatch {
+            border: 2px solid #64748b;
+            border-radius: 8px;
+        }
+
+        .picker-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .picker-hint {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        .color-presets {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .color-box {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: transform 0.2s;
+        }
+
+        .color-box:hover {
+            transform: scale(1.15);
+            border-color: white;
+        }
+
+        /* Toggle switches */
+        .toggle-box {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: #0f172a;
+            border-radius: 10px;
+            border: 1px solid #334155;
+            font-size: 0.85rem;
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 22px;
+        }
+
+        .switch input { opacity: 0; width: 0; height: 0; }
+
+        .slider-switch {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #475569;
+            transition: .3s;
+            border-radius: 22px;
+        }
+
+        .slider-switch:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider-switch { background-color: #10b981; }
+        input:checked + .slider-switch.danger-switch { background-color: #ef4444; }
+        input:checked + .slider-switch:before { transform: translateX(18px); }
+
+        /* Vùng Camera AI */
+        .camera-wrapper {
+            position: relative;
+            width: 100%;
+            height: 220px;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid #334155;
+        }
+
+        #webcamVideo {
+            display: none;
+        }
+
+        #cameraCanvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Lật gương webcam */
+        }
+
+        .camera-placeholder {
+            color: var(--text-dim);
+            font-size: 0.88rem;
+            text-align: center;
+            padding: 15px;
+        }
+
+        .gesture-indicator {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            padding: 8px 12px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(4px);
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .gesture-legend {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            background: #0f172a;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            border: 1px solid #334155;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: #1e293b;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .legend-item.span-2 {
+            grid-column: span 2;
+        }
+
+        /* Chips mẫu lệnh giọng nói */
+        .voice-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 4px;
+        }
+
+        .chip {
+            background: #0f172a;
+            color: #cbd5e1;
+            padding: 5px 9px;
+            border-radius: 12px;
+            font-size: 0.76rem;
+            cursor: pointer;
+            border: 1px solid #334155;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .chip:hover {
+            background: #334155;
+            color: #38bdf8;
+            border-color: #38bdf8;
+            transform: translateY(-1px);
+        }
+
+        .chip:active {
+            transform: scale(0.96);
+        }
+
+        .log-box {
+            background: #0f172a;
+            padding: 10px;
+            border-radius: 8px;
+            font-family: 'Consolas', monospace;
+            font-size: 0.8rem;
+            color: #38bdf8;
+            min-height: 130px;
+            max-height: 180px;
+            overflow-y: auto;
+            border: 1px solid #334155;
+            line-height: 1.4;
+        }
+
+        footer {
+            margin-top: 20px;
+            font-size: 0.82rem;
+            color: var(--text-dim);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>ĐIỀU KHIỂN ĐÈN THÔNG MINH IoT</h1>
+        <p>Khoa CNTT - ĐH Công Thương TP.HCM | Nhóm 15 (AIoT MediaPipe + MQTT + ESP32)</p>
+        <div class="status-badge">
+            <div class="dot" id="mqttDot"></div>
+            <span id="mqttStatusText">Đang kết nối MQTT Broker...</span>
+        </div>
+    </header>
+
+    <div class="container">
+
+        <!-- CỘT 1: TRẠNG THÁI ĐÈN & BẬT TẮT -->
+        <div class="card">
+            <h2>💡 Trạng Thái Đèn (WS2812B)</h2>
+            <div class="lamp-preview">
+                <div class="bulb on" id="virtualBulb">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M12 2C8.13 2 5 5.13 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.87-3.13-7-7-7zm-3 18h6v1c0 .55-.45 1-1 1h-4c-.55 0-1-.45-1-1v-1z"/>
+                    </svg>
+                </div>
+                <div class="state-text" id="stateLabel">ĐÈN ĐANG BẬT</div>
+            </div>
+
+            <div class="priority-info">
+                <span>Nguồn điều khiển:</span>
+                <span class="priority-tag" id="priorityTag">KHỞI ĐỘNG (Ưu tiên 4)</span>
+            </div>
+
+            <div class="toggle-box">
+                <div>
+                    <strong style="color: #f87171;">🚨 Khóa khẩn cấp (Ưu tiên 1)</strong>
+                    <div style="font-size: 0.72rem; color: var(--text-dim);">Chặn toàn bộ AI Camera & Giọng nói</div>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="emergencyToggle" onchange="toggleEmergency(this.checked)">
+                    <span class="slider-switch danger-switch"></span>
+                </label>
+            </div>
+
+            <div class="toggle-box">
+                <div>
+                    <strong style="color: #38bdf8;">🌙 Tự động LDR (Ưu tiên 4)</strong>
+                    <div style="font-size: 0.72rem; color: var(--text-dim);">Bật khi tối, tắt khi sáng</div>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="ldrToggle" checked onchange="toggleAutoLdr(this.checked)">
+                    <span class="slider-switch"></span>
+                </label>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn-on" onclick="sendSimpleCmd('ON')">BẬT ĐÈN</button>
+                <button class="btn-off" onclick="sendSimpleCmd('OFF')">TẮT ĐÈN</button>
+            </div>
+
+            <div class="control-row">
+                <label id="brightLabelTitle"><span>Độ sáng (Dimming):</span> <span id="brightVal" style="font-weight:bold; color:#38bdf8;">70%</span></label>
+                <input type="range" id="brightSlider" min="0" max="100" value="70" oninput="changeBrightness(this.value)">
+            </div>
+
+            <div class="control-row">
+                <label>
+                    <span>🎨 Chọn màu RGB tùy chọn:</span>
+                    <span id="colorHexLabel" style="font-family: monospace; font-size: 0.82rem; color: #38bdf8; font-weight: bold;">#FFB432 (255, 180, 50)</span>
+                </label>
+                <div class="color-picker-row">
+                    <input type="color" id="nativeColorPicker" value="#ffb432" oninput="onColorPickerInput(this.value)" onchange="onColorPickerChange(this.value)">
+                    <div class="picker-info">
+                        <span style="font-weight: 600; color: #f8fafc; font-size: 0.85rem;">Bấm vào ô màu để mở dải màu RGB</span>
+                        <span class="picker-hint">Hỗ trợ dải màu 16.7 triệu màu (Đỏ, Xanh lá, Lam)</span>
+                    </div>
+                </div>
+                <div style="font-size: 0.78rem; color: var(--text-dim); margin-top: 4px;">Màu thiết lập sẵn phổ biến:</div>
+                <div class="color-presets">
+                    <div class="color-box" style="background:#ffb703" title="Vàng ấm" onclick="selectPresetColor('#ffb703', 255, 180, 50)"></div>
+                    <div class="color-box" style="background:#ff0054" title="Đỏ tươi" onclick="selectPresetColor('#ff0054', 255, 0, 84)"></div>
+                    <div class="color-box" style="background:#ff7b00" title="Cam" onclick="selectPresetColor('#ff7b00', 255, 123, 0)"></div>
+                    <div class="color-box" style="background:#06d6a0" title="Xanh lá" onclick="selectPresetColor('#06d6a0', 6, 214, 160)"></div>
+                    <div class="color-box" style="background:#118ab2" title="Xanh dương" onclick="selectPresetColor('#118ab2', 17, 138, 178)"></div>
+                    <div class="color-box" style="background:#9d4edd" title="Tím" onclick="selectPresetColor('#9d4edd', 157, 78, 221)"></div>
+                    <div class="color-box" style="background:#ffffff" title="Trắng sáng" onclick="selectPresetColor('#ffffff', 255, 255, 255)"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CỘT 2: AI CAMERA NHẬN DIỆN CỬ CHỈ (GOOGLE MEDIAPIPE) -->
+        <div class="card">
+            <h2>📷 AI Camera Cử Chỉ (MediaPipe)</h2>
+            <button class="btn-cam" id="camBtn" onclick="toggleCamera()">
+                <span id="camIcon">📹</span> <span id="camText">BẬT CAMERA NHẬN DIỆN TAY</span>
+            </button>
+
+            <div class="camera-wrapper">
+                <video id="webcamVideo" autoplay playsinline></video>
+                <canvas id="cameraCanvas"></canvas>
+                <div class="camera-placeholder" id="camPlaceholder">
+                    Camera đang tắt.<br>Bấm nút bên trên để kích hoạt AI nhận diện bàn tay.
+                </div>
+                <div class="gesture-indicator" id="gestureIndicator" style="display: none;">
+                    <span>Nhận diện: <strong id="detectedGestureText">Chưa thấy tay</strong></span>
+                    <span id="gestureHoldProgress">0%</span>
+                </div>
+            </div>
+
+            <div class="gesture-legend">
+                <div class="legend-item"><span>✋</span> <span><strong>Xòe tay (≥4 ngón)</strong>: BẬT ĐÈN</span></div>
+                <div class="legend-item"><span>✊</span> <span><strong>Nắm tay (0 ngón)</strong>: TẮT ĐÈN</span></div>
+                <div class="legend-item"><span>☝️</span> <span><strong>1 ngón trỏ</strong>: ĐỔI MÀU TIẾP</span></div>
+                <div class="legend-item"><span>✌️</span> <span><strong>2 ngón tay</strong>: TĂNG SÁNG (+15%)</span></div>
+                <div class="legend-item span-2">
+                    <span style="display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;">
+                        <svg viewBox="0 0 100 100" width="20" height="20" style="vertical-align: middle;">
+                            <path d="M28 55 V24 C28 17 38 17 38 24 V18 C38 11 48 11 48 18 V24 C48 17 58 17 58 24 V52 C61 50 67 52 67 58 C67 64 64 70 60 76 C55 84 46 88 38 88 C28 88 22 81 21 70 C20 63 24 58 28 55 Z" fill="#FFC107" stroke="#E65100" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+                            <path d="M38 23 V54" stroke="#E65100" stroke-width="3.5" stroke-linecap="round"/>
+                            <path d="M48 23 V54" stroke="#E65100" stroke-width="3.5" stroke-linecap="round"/>
+                            <path d="M58 54 C62 50 66 53 66 59 C66 64 62 67 57 67" fill="#FFC107" stroke="#E65100" stroke-width="3" stroke-linecap="round"/>
+                            <path d="M23 60 C24 53 32 52 42 52 C52 52 59 51 61 56 C63 60 62 65 56 67 C50 68 40 67 35 71" fill="#FFD54F" stroke="#E65100" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
+                    <span><strong>3 ngón tay</strong>: GIẢM SÁNG (-15%)</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- CỘT 3: ĐIỀU KHIỂN GIỌNG NÓI & NHẬT KÝ HỆ THỐNG -->
+        <div class="card">
+            <h2>🎙️ Giọng Nói Tiếng Việt (Ưu Tiên 2)</h2>
+            <button class="btn-voice" id="voiceBtn" onclick="toggleVoiceRecognition()">
+                <span id="voiceIcon">🎤</span> <span id="voiceText">Bấm Để Nói Tiếng Việt</span>
+            </button>
+            
+            <div class="control-row">
+                <label>Khẩu lệnh mẫu (nói hoặc bấm trực tiếp để thử):</label>
+                <div class="voice-chips">
+                    <span class="chip" onclick="simulateVoice('bật đèn')">💡 Bật đèn</span>
+                    <span class="chip" onclick="simulateVoice('tắt đèn')">🌑 Tắt đèn</span>
+                    <span class="chip" onclick="simulateVoice('màu đỏ')">🔴 Màu đỏ</span>
+                    <span class="chip" onclick="simulateVoice('màu xanh lá')">🟢 Xanh lá</span>
+                    <span class="chip" onclick="simulateVoice('màu xanh dương')">🔵 Xanh dương</span>
+                    <span class="chip" onclick="simulateVoice('màu vàng ấm')">🟡 Vàng ấm</span>
+                    <span class="chip" onclick="simulateVoice('màu trắng')">⚪ Trắng sáng</span>
+                    <span class="chip" onclick="simulateVoice('tăng sáng')">🔆 Tăng sáng</span>
+                    <span class="chip" onclick="simulateVoice('giảm sáng')">🔅 Giảm sáng</span>
+                    <span class="chip" onclick="simulateVoice('đổi màu')">🔄 Đổi màu</span>
+                </div>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                <h2 style="font-size: 1rem; border: none; padding: 0;">📋 Nhật Ký Hoạt Động & Ưu Tiên</h2>
+                <button style="flex: 0 0 auto; padding: 4px 10px; font-size: 0.72rem; background: #334155; border-radius: 6px; color: #cbd5e1;" onclick="clearLog()">Xóa log</button>
+            </div>
+            <div class="log-box" id="voiceLog">
+                Đang chờ lệnh điều khiển...
+            </div>
+        </div>
+
+    </div>
+
+    <footer>
+        Đồ án môn học IoT - ĐH Công Thương TP.HCM | GVHD: ThS. Đinh Huy Hoàng<br>
+        SVTH: Huỳnh Thái Tấn Nghĩa | Bùi Quốc Toàn | Bùi Quang Tiến
+    </footer>
+
+    <script>
+        const MQTT_BROKER = "wss://broker.hivemq.com:8884/mqtt";
+        const TOPIC_CONTROL = "nhom15/smartlight/control";
+        const TOPIC_STATUS  = "nhom15/smartlight/status";
+
+        let client = null;
+        let isLightOn = true;
+        let currentBrightness = 70;
+        let currentColor = { r: 255, g: 180, b: 50 };
+
+        function initMQTT() {
+            const clientId = "WebDashboard_Nhom15_" + Math.random().toString(16).substring(2, 8);
+            client = mqtt.connect(MQTT_BROKER, { clientId: clientId });
+
+            client.on('connect', () => {
+                document.getElementById('mqttDot').classList.add('connected');
+                document.getElementById('mqttStatusText').textContent = "Đã kết nối Broker MQTT (Sẵn sàng điều khiển Wokwi)";
+                client.subscribe(TOPIC_STATUS);
+            });
+
+            client.on('message', (topic, message) => {
+                if (topic === TOPIC_STATUS) {
+                    try {
+                        const data = JSON.parse(message.toString());
+                        updateUI(data);
+                    } catch (e) {}
+                }
+            });
+
+            client.on('error', () => {
+                document.getElementById('mqttDot').classList.remove('connected');
+                document.getElementById('mqttStatusText').textContent = "Mất kết nối MQTT Broker!";
+            });
+        }
+
+        function updateUI(data) {
+            isLightOn = (data.state === "ON");
+            currentBrightness = data.brightness;
+            if (data.r !== undefined && data.g !== undefined && data.b !== undefined) {
+                currentColor = { r: data.r, g: data.g, b: data.b };
+                const hex = rgbToHex(currentColor.r, currentColor.g, currentColor.b);
+                const picker = document.getElementById('nativeColorPicker');
+                if (picker && !isColorPickerActive) picker.value = hex;
+                const hexLabel = document.getElementById('colorHexLabel');
+                if (hexLabel) hexLabel.textContent = `${hex.toUpperCase()} (${currentColor.r}, ${currentColor.g}, ${currentColor.b})`;
+            }
+
+            const prioTag = document.getElementById('priorityTag');
+            if (data.source && prioTag) {
+                prioTag.textContent = `${data.source} (Ưu tiên ${data.priority || '?'})`;
+                if (data.priority === 1) prioTag.style.background = "#ef4444";
+                else if (data.priority === 2) prioTag.style.background = "#8b5cf6";
+                else if (data.priority === 3) prioTag.style.background = "#0284c7";
+                else prioTag.style.background = "#10b981";
+            }
+
+            if (data.conflict) {
+                logMessage(`<span style="color:#f87171;">⚠️ ${data.conflict}</span>`);
+            }
+            if (data.emergency !== undefined) {
+                document.getElementById('emergencyToggle').checked = data.emergency;
+            }
+            if (data.auto_ldr !== undefined) {
+                document.getElementById('ldrToggle').checked = data.auto_ldr;
+            }
+
+            updateLocalDisplay();
+        }
+
+        function updateLocalDisplay() {
+            const bulb = document.getElementById('virtualBulb');
+            const label = document.getElementById('stateLabel');
+            const slider = document.getElementById('brightSlider');
+            const brightTitle = document.getElementById('brightLabelTitle');
+
+            if (slider) slider.value = currentBrightness;
+
+            if (isLightOn) {
+                if (slider) {
+                    slider.style.opacity = "1";
+                    slider.style.filter = "none";
+                }
+                if (brightTitle) {
+                    brightTitle.innerHTML = `<span>Độ sáng (Dimming):</span> <span id="brightVal" style="font-weight:bold; color:#38bdf8;">${currentBrightness}%</span>`;
+                }
+                bulb.classList.add('on');
+                label.textContent = "ĐÈN ĐANG BẬT (" + currentBrightness + "%)";
+                label.style.color = "#f8fafc";
+                const rgbStr = `rgb(${currentColor.r}, ${currentColor.g}, ${currentColor.b})`;
+                bulb.style.backgroundColor = rgbStr;
+                bulb.style.boxShadow = `0 0 ${currentBrightness * 0.8}px ${rgbStr}`;
+            } else {
+                if (slider) {
+                    slider.style.opacity = "0.45";
+                    slider.style.filter = "grayscale(60%)";
+                }
+                if (brightTitle) {
+                    brightTitle.innerHTML = `<span>Mức sáng ghi nhớ:</span> <span id="brightVal" style="font-weight:bold; color:#94a3b8;">${currentBrightness}%</span> <span style="color:#f87171; font-size:0.75rem; font-weight:normal;">(Đèn đang tắt)</span>`;
+                }
+                bulb.classList.remove('on');
+                label.textContent = "ĐÈN ĐANG TẮT";
+                label.style.color = "#94a3b8";
+                bulb.style.backgroundColor = "#475569";
+                bulb.style.boxShadow = "none";
+            }
+        }
+
+        function sendSimpleCmd(cmd) {
+            if (cmd === "ON") {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+            } else if (cmd === "OFF") {
+                isLightOn = false;
+            }
+            updateLocalDisplay();
+            if (client && client.connected) {
+                client.publish(TOPIC_CONTROL, cmd);
+                logMessage(">> Gửi lệnh App: " + cmd);
+            }
+        }
+
+        function toggleEmergency(isLocked) {
+            const payload = JSON.stringify({ emergency: isLocked, source: "EMERGENCY_OVERRIDE" });
+            if (client && client.connected) {
+                client.publish(TOPIC_CONTROL, payload);
+                logMessage(`🚨 ${isLocked ? "BẬT KHÓA KHẨN CẤP (Ưu tiên 1)" : "HỦY KHÓA KHẨN CẤP"}`);
+            }
+        }
+
+        function toggleAutoLdr(isEnabled) {
+            const payload = JSON.stringify({ auto_ldr: isEnabled, source: "APP_CONFIG" });
+            if (client && client.connected) {
+                client.publish(TOPIC_CONTROL, payload);
+                logMessage(`🌙 Tự động LDR: ${isEnabled ? "BẬT" : "TẮT"}`);
+            }
+        }
+
+        function rgbToHex(r, g, b) {
+            return "#" + [r, g, b].map(x => {
+                const hex = Math.max(0, Math.min(255, x)).toString(16);
+                return hex.length === 1 ? "0" + hex : hex;
+            }).join("");
+        }
+
+        function hexToRgb(hex) {
+            const bigint = parseInt(hex.replace("#", ""), 16);
+            return {
+                r: (bigint >> 16) & 255,
+                g: (bigint >> 8) & 255,
+                b: bigint & 255
+            };
+        }
+
+        let colorPickerTimer = null;
+        let isColorPickerActive = false;
+
+        function onColorPickerInput(hex) {
+            isColorPickerActive = true;
+            const rgb = hexToRgb(hex);
+            const hexLabel = document.getElementById('colorHexLabel');
+            if (hexLabel) hexLabel.textContent = `${hex.toUpperCase()} (${rgb.r}, ${rgb.g}, ${rgb.b})`;
+
+            clearTimeout(colorPickerTimer);
+            colorPickerTimer = setTimeout(() => {
+                sendColor(rgb.r, rgb.g, rgb.b);
+                isColorPickerActive = false;
+            }, 60);
+        }
+
+        function onColorPickerChange(hex) {
+            clearTimeout(colorPickerTimer);
+            isColorPickerActive = false;
+            const rgb = hexToRgb(hex);
+            sendColor(rgb.r, rgb.g, rgb.b);
+        }
+
+        function selectPresetColor(hex, r, g, b) {
+            const picker = document.getElementById('nativeColorPicker');
+            if (picker) picker.value = hex;
+            const hexLabel = document.getElementById('colorHexLabel');
+            if (hexLabel) hexLabel.textContent = `${hex.toUpperCase()} (${r}, ${g}, ${b})`;
+            sendColor(r, g, b);
+        }
+
+        function sendColor(r, g, b) {
+            const payload = JSON.stringify({ r: r, g: g, b: b, state: "ON", source: "APP_COLOR_PICKER" });
+            if (client && client.connected) {
+                client.publish(TOPIC_CONTROL, payload);
+                logMessage(`🎨 Đổi màu RGB: (${r}, ${g}, ${b})`);
+            }
+        }
+
+        function changeBrightness(val) {
+            currentBrightness = parseInt(val);
+            if (currentBrightness > 0) isLightOn = true;
+            else isLightOn = false;
+            updateLocalDisplay();
+            const payload = JSON.stringify({ 
+                brightness: currentBrightness, 
+                state: isLightOn ? "ON" : "OFF", 
+                source: "APP_SLIDER" 
+            });
+            if (client && client.connected) {
+                client.publish(TOPIC_CONTROL, payload);
+            }
+        }
+
+        function simulateVoice(text) {
+            logMessage(`🎙️ Bấm mô phỏng lệnh: "<em>${text}</em>"`);
+            handleVoiceCommand(text);
+        }
+
+        function clearLog() {
+            const logBox = document.getElementById('voiceLog');
+            if (logBox) logBox.innerHTML = `<em>Nhật ký đã làm mới lúc ${new Date().toLocaleTimeString()}</em><br>`;
+        }
+
+        function logMessage(text) {
+            const logBox = document.getElementById('voiceLog');
+            logBox.innerHTML = `<strong>${new Date().toLocaleTimeString()}</strong>: ${text}<br>` + logBox.innerHTML;
+        }
+
+        // ==============================================================
+        // 📷 THỊ GIÁC MÁY TÍNH AI: GOOGLE MEDIAPIPE HANDS
+        // ==============================================================
+        let camera = null;
+        let hands = null;
+        let isCameraActive = false;
+        let lastDetectedAction = "";
+        let actionHoldFrames = 0;
+        let isActionExecuted = false;
+
+        // Âm thanh phản hồi ngắn khi nhận lệnh thành công
+        function playBeep() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(800, ctx.currentTime);
+                gain.gain.setValueAtTime(0.08, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.12);
+            } catch (e) {}
+        }
+
+        const FRAMES_TO_TRIGGER = 12; // Giữ 12 frames (~0.4s) để xác nhận thế tay
+
+        function initMediaPipe() {
+            hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.65,
+                minTrackingConfidence: 0.65
+            });
+
+            hands.onResults(onHandResults);
+        }
+
+        async function toggleCamera() {
+            const camBtn = document.getElementById('camBtn');
+            const placeholder = document.getElementById('camPlaceholder');
+            const indicator = document.getElementById('gestureIndicator');
+            const videoElement = document.getElementById('webcamVideo');
+
+            if (!isCameraActive) {
+                camBtn.innerHTML = "⏳ Đang tải AI MediaPipe...";
+                if (!hands) initMediaPipe();
+
+                try {
+                    camera = new Camera(videoElement, {
+                        onFrame: async () => {
+                            if (isCameraActive) {
+                                await hands.send({ image: videoElement });
+                            }
+                        },
+                        width: 640,
+                        height: 480
+                    });
+
+                    await camera.start();
+                    isCameraActive = true;
+                    camBtn.innerHTML = "🔴 TẮT CAMERA AI";
+                    camBtn.classList.add('active');
+                    placeholder.style.display = "none";
+                    indicator.style.display = "flex";
+                    logMessage("📷 Đã bật Camera AI nhận diện cử chỉ!");
+                } catch (err) {
+                    alert("Không thể mở Webcam: " + err.message);
+                    camBtn.innerHTML = "📹 BẬT CAMERA NHẬN DIỆN TAY";
+                }
+            } else {
+                if (camera) {
+                    await camera.stop();
+                }
+                const stream = videoElement.srcObject;
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                isCameraActive = false;
+                camBtn.innerHTML = "📹 BẬT CAMERA NHẬN DIỆN TAY";
+                camBtn.classList.remove('active');
+                placeholder.style.display = "block";
+                indicator.style.display = "none";
+                const canvas = document.getElementById('cameraCanvas');
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                logMessage("📷 Đã tắt Camera.");
+            }
+        }
+
+        // Vẽ xương tay và nhận diện cử chỉ từ 21 Hand Landmarks
+        function onHandResults(results) {
+            const canvas = document.getElementById('cameraCanvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 640;
+            canvas.height = 480;
+
+            ctx.save();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+            const detectedText = document.getElementById('detectedGestureText');
+            const holdProgress = document.getElementById('gestureHoldProgress');
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+
+                // Vẽ các khớp nối xương tay
+                drawHandSkeleton(ctx, landmarks);
+
+                // Thuật toán đếm ngón tay mở
+                const indexOpen  = landmarks[8].y  < landmarks[6].y;
+                const middleOpen = landmarks[12].y < landmarks[10].y;
+                const ringOpen   = landmarks[16].y < landmarks[14].y;
+                const pinkyOpen  = landmarks[20].y < landmarks[18].y;
+                // Ngón cái tính theo khoảng cách với gốc ngón út
+                const thumbDist = Math.hypot(landmarks[4].x - landmarks[17].x, landmarks[4].y - landmarks[17].y);
+                const thumbBase = Math.hypot(landmarks[2].x - landmarks[17].x, landmarks[2].y - landmarks[17].y);
+                const thumbOpen = thumbDist > thumbBase * 1.25;
+
+                const openFingers = (thumbOpen?1:0) + (indexOpen?1:0) + (middleOpen?1:0) + (ringOpen?1:0) + (pinkyOpen?1:0);
+
+                let currentAction = "";
+                let label = "";
+
+                if (openFingers >= 4) {
+                    currentAction = "ON";
+                    label = "✋ XÒE TAY (BẬT ĐÈN)";
+                } else if (openFingers === 0) {
+                    currentAction = "OFF";
+                    label = "✊ NẮM TAY (TẮT ĐÈN)";
+                } else if (openFingers === 1 && indexOpen) {
+                    currentAction = "ROTATE";
+                    label = "☝️ 1 NGÓN TRỎ (ĐỔI MÀU)";
+                } else if (openFingers === 2 && indexOpen && middleOpen) {
+                    currentAction = "SWIPE_RIGHT";
+                    label = "✌️ 2 NGÓN TAY (TĂNG SÁNG)";
+                } else if (openFingers === 3 && indexOpen && middleOpen && ringOpen) {
+                    currentAction = "SWIPE_LEFT";
+                    label = "🤟 3 NGÓN TAY (GIẢM SÁNG)";
+                }
+
+                if (currentAction !== "") {
+                    // Nếu thế tay bị thay đổi, reset cờ thực thi
+                    if (currentAction !== lastDetectedAction) {
+                        lastDetectedAction = currentAction;
+                        actionHoldFrames = 1;
+                        isActionExecuted = false;
+                    } else {
+                        actionHoldFrames++;
+                    }
+
+                    // Nếu đã thực thi xong thế tay này rồi -> Khóa lại không lặp lại
+                    if (isActionExecuted) {
+                        detectedText.textContent = "✅ " + label + " [ĐÃ THỰC THI - GIỮ YÊN MÀU NÀY]";
+                        holdProgress.textContent = "ĐÃ KHÓA";
+                        holdProgress.style.color = "#10b981";
+                    } else {
+                        const progress = Math.min(100, Math.round((actionHoldFrames / FRAMES_TO_TRIGGER) * 100));
+                        detectedText.textContent = label;
+                        holdProgress.textContent = progress + "%";
+                        holdProgress.style.color = progress === 100 ? "#10b981" : "#f59e0b";
+
+                        // Khi giữ đủ số frame (~0.4s) -> Kích hoạt đúng 1 lần duy nhất!
+                        if (actionHoldFrames >= FRAMES_TO_TRIGGER) {
+                            executeCameraGesture(currentAction, label);
+                            playBeep();
+                            isActionExecuted = true; // Khóa lại ngay lập tức!
+                        }
+                    }
+                } else {
+                    detectedText.textContent = "Bàn tay chưa tạo thế lệnh";
+                    holdProgress.textContent = "0%";
+                    lastDetectedAction = "";
+                    actionHoldFrames = 0;
+                    isActionExecuted = false;
+                }
+            } else {
+                detectedText.textContent = "Không thấy bàn tay (Sẵn sàng)";
+                holdProgress.textContent = "0%";
+                lastDetectedAction = "";
+                actionHoldFrames = 0;
+                isActionExecuted = false;
+            }
+
+            ctx.restore();
+        }
+
+        // Bắn lệnh MQTT khi AI phát hiện thế tay
+        function executeCameraGesture(action, label) {
+            logMessage(`🤖 <strong>AI Camera phát hiện:</strong> ${label}`);
+            if (action === "SWIPE_RIGHT") {
+                if (!isLightOn || currentBrightness === 0) {
+                    isLightOn = true;
+                    currentBrightness = 15;
+                } else {
+                    currentBrightness = Math.min(100, currentBrightness + 15);
+                }
+                updateLocalDisplay();
+            } else if (action === "SWIPE_LEFT") {
+                if (currentBrightness > 15) {
+                    currentBrightness -= 15;
+                } else {
+                    currentBrightness = 0;
+                    isLightOn = false; // Khi giảm hết cỡ -> Tự động TẮT ĐÈN!
+                }
+                updateLocalDisplay();
+            } else if (action === "ON") {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+            } else if (action === "OFF") {
+                isLightOn = false;
+                updateLocalDisplay();
+            }
+            const payload = JSON.stringify({ gesture: action, source: "CAMERA_AI_MEDIAPIPE" });
+            if (client && client.connected) {
+                client.publish(TOPIC_CONTROL, payload);
+            }
+        }
+
+        // Hàm vẽ skeleton bàn tay
+        function drawHandSkeleton(ctx, landmarks) {
+            const connections = [
+                [0,1],[1,2],[2,3],[3,4],
+                [0,5],[5,6],[6,7],[7,8],
+                [0,9],[9,10],[10,11],[11,12],
+                [0,13],[13,14],[14,15],[15,16],
+                [0,17],[17,18],[18,19],[19,20],
+                [5,9],[9,13],[13,17]
+            ];
+
+            ctx.strokeStyle = "#00f0ff";
+            ctx.lineWidth = 3;
+
+            connections.forEach(([i, j]) => {
+                ctx.beginPath();
+                ctx.moveTo(landmarks[i].x * 640, landmarks[i].y * 480);
+                ctx.lineTo(landmarks[j].x * 640, landmarks[j].y * 480);
+                ctx.stroke();
+            });
+
+            ctx.fillStyle = "#ffeb3b";
+            landmarks.forEach((pt) => {
+                ctx.beginPath();
+                ctx.arc(pt.x * 640, pt.y * 480, 5, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
+        // ==========================================
+        // NHẬN DIỆN GIỌNG NÓI TIẾNG VIỆT
+        // ==========================================
+        let recognition = null;
+        let isListening = false;
+
+        function initSpeech() {
+            window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!window.SpeechRecognition) return;
+            recognition = new window.SpeechRecognition();
+            recognition.lang = 'vi-VN';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onstart = () => {
+                isListening = true;
+                const btn = document.getElementById('voiceBtn');
+                btn.classList.add('listening');
+                document.getElementById('voiceText').textContent = "Đang nghe... Hãy nói ngay!";
+            };
+
+            recognition.onresult = (event) => {
+                const spokenText = event.results[0][0].transcript.toLowerCase();
+                logMessage(`🎙️ Nhận diện: "<em>${spokenText}</em>"`);
+                handleVoiceCommand(spokenText);
+            };
+
+            recognition.onerror = () => { stopVoice(); };
+            recognition.onend = () => { stopVoice(); };
+        }
+
+        function toggleVoiceRecognition() {
+            if (!recognition) initSpeech();
+            if (!isListening) recognition.start();
+            else recognition.stop();
+        }
+
+        function stopVoice() {
+            isListening = false;
+            const btn = document.getElementById('voiceBtn');
+            btn.classList.remove('listening');
+            document.getElementById('voiceText').textContent = "Bấm Để Nói Tiếng Việt";
+        }
+
+        function handleVoiceCommand(text) {
+            let cmdPayload = "";
+            if (text.includes("bật") || text.includes("mở")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ state: "ON", source: "VOICE" });
+            } else if (text.includes("tắt") || text.includes("đóng")) {
+                isLightOn = false;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ state: "OFF", source: "VOICE" });
+            } else if (text.includes("đỏ")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ r: 255, g: 0, b: 0, state: "ON", source: "VOICE" });
+            } else if (text.includes("xanh lá") || text.includes("lục")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ r: 0, g: 255, b: 0, state: "ON", source: "VOICE" });
+            } else if (text.includes("xanh dương") || text.includes("lam")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ r: 0, g: 150, b: 255, state: "ON", source: "VOICE" });
+            } else if (text.includes("vàng")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ r: 255, g: 220, b: 0, state: "ON", source: "VOICE" });
+            } else if (text.includes("trắng")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ r: 255, g: 255, b: 255, state: "ON", source: "VOICE" });
+            } else if (text.includes("ấm")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ r: 255, g: 180, b: 50, state: "ON", source: "VOICE" });
+            } else if (text.includes("xoay") || text.includes("đổi màu")) {
+                isLightOn = true;
+                if (currentBrightness === 0) currentBrightness = 70;
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ gesture: "ROTATE", source: "VOICE" });
+            } else if (text.includes("tăng") || text.includes("sáng hơn")) {
+                if (!isLightOn || currentBrightness === 0) {
+                    isLightOn = true;
+                    currentBrightness = 15;
+                } else {
+                    currentBrightness = Math.min(100, currentBrightness + 15);
+                }
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ gesture: "RIGHT", source: "VOICE" });
+            } else if (text.includes("giảm") || text.includes("tối hơn")) {
+                if (currentBrightness > 15) {
+                    currentBrightness -= 15;
+                } else {
+                    currentBrightness = 0;
+                    isLightOn = false;
+                }
+                updateLocalDisplay();
+                cmdPayload = JSON.stringify({ gesture: "LEFT", source: "VOICE" });
+            } else {
+                logMessage("❓ Chưa nhận diện được lệnh. Hãy nói: 'Bật đèn', 'Tắt đèn', 'Màu đỏ'...");
+                return;
+            }
+
+            if (client && client.connected) {
+                client.publish(TOPIC_CONTROL, cmdPayload);
+            }
+        }
+
+        window.onload = () => {
+            initMQTT();
+            initSpeech();
+        };
+    </script>
+</body>
+</html>
