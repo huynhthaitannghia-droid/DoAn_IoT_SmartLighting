@@ -22,7 +22,7 @@ Hệ thống **AIoT Smart Lighting** là giải pháp chiếu sáng thông minh 
 
 1. **Nhận diện cử chỉ AI qua Camera (Google MediaPipe Hands):**
    - Trích xuất 21 điểm mốc không gian (3D Landmarks) của bàn tay theo thời gian thực (30-60 FPS).
-   - Nhận diện các thế ngón tay: Bật đèn, Tắt đèn, Tăng/Giảm độ sáng 15% mỗi bước, Xoay tay đổi màu đèn.
+   - Nhận diện các thế ngón tay chuẩn xác: Xòe tay (Bật), Nắm tay (Tắt), 1 ngón trỏ (Đổi màu), 2 ngón (Tăng sáng 15%), 3 ngón (Giảm sáng 15%).
 
 2. **Điều khiển giọng nói tiếng Việt tự nhiên (Web Speech API):**
    - Xử lý ngôn ngữ tự nhiên tiếng Việt (`vi-VN`) trực tiếp trên Web Dashboard: *"Bật đèn"*, *"Tắt đèn"*, *"Tăng sáng"*, *"Giảm sáng"*, *"Ánh sáng ấm"*, *"Màu đỏ"*, v.v.
@@ -71,20 +71,33 @@ Hệ thống **AIoT Smart Lighting** là giải pháp chiếu sáng thông minh 
 | **Cảm biến quang trở LDR Module** | `VCC` | `3V3` | Nguồn 3.3V |
 | | `GND` | `GND` | Mass chung |
 | | `AO` | `GPIO 34` | Đọc tín hiệu Analog (ADC1_CH6) |
-| **Nút bấm vật lý (Gesture Sim)** | Chân 1 | `GND` | Mass chung |
+| **Nút bấm vật lý (Mô phỏng cử chỉ)** | Chân 1 | `GND` | Mass chung |
 | | Chân 2 | `GPIO 12` | Kích hoạt điện trở kéo nội `INPUT_PULLUP` |
 
 ---
 
-## 🖐️ Bảng ánh xạ Cử chỉ bàn tay (Hand Gestures)
+## 🖐️ Bảng điều khiển bằng Cử chỉ bàn tay (Camera AI MediaPipe)
 
-| Cử chỉ | Thế ngón tay nhận diện | Hành vi hệ thống |
-| :---: | :--- | :--- |
-| ☝️ | Giơ 1 ngón trỏ | **Bật đèn** (Khôi phục mức sáng ghi nhớ) |
-| ✌️ | Giơ 2 ngón tay (Chữ V) | **Tắt đèn** |
-| 🤟 | Giơ 3 ngón tay | **Tăng độ sáng** thêm +15% |
-| 🖖 | Giơ 4 ngón tay | **Giảm độ sáng** -15% (dưới 15% tự tắt) |
-| 🖐️ | Xòe 5 ngón / Xoay tay | **Đổi màu đèn** xoay vòng qua 8 gam màu |
+| Cử chỉ | Thế ngón tay nhận diện | Lệnh MQTT | Hành vi hệ thống |
+| :---: | :--- | :---: | :--- |
+| ✋ | **Xòe bàn tay** (Mở từ 4 đến 5 ngón) | `ON` | **Bật đèn** (Khôi phục mức sáng ghi nhớ) |
+| ✊ | **Nắm bàn tay** (0 ngón mở) | `OFF` | **Tắt đèn** hoàn toàn |
+| ☝️ | **1 ngón trỏ** dựng thẳng | `ROTATE` | **Đổi màu tiếp theo** (Xoay vòng 8 gam màu) |
+| ✌️ | **2 ngón tay** (Ngón trỏ + Ngón giữa) | `SWIPE_RIGHT` | **Tăng độ sáng** (+15% mỗi bước) |
+| 🤟 | **3 ngón tay** (Ngón trỏ + Giữa + Áp út) | `SWIPE_LEFT` | **Giảm độ sáng** (-15% mỗi bước, dưới 15% tự động tắt) |
+
+---
+
+## 🎙️ Bảng lệnh Điều khiển Giọng nói tiếng Việt (Web Speech API)
+
+| Lệnh giọng nói (Mẫu câu nhận diện) | Hành vi hệ thống |
+| :--- | :--- |
+| *"Bật đèn"*, *"Mở đèn"*, *"Sáng lên"* | **Bật đèn** (Khôi phục mức sáng ghi nhớ) |
+| *"Tắt đèn"*, *"Tắt đi"*, *"Đi ngủ"* | **Tắt đèn** hoàn toàn |
+| *"Sáng hơn"*, *"Tăng sáng"*, *"Tăng độ sáng"* | **Tăng độ sáng** thêm +15% |
+| *"Tối hơn"*, *"Giảm sáng"*, *"Giảm độ sáng"* | **Giảm độ sáng** -15% (dưới 15% tự tắt) |
+| *"Đổi màu"*, *"Chuyển màu"* | **Xoay vòng đổi màu** qua 8 gam màu |
+| *"Màu đỏ"*, *"Màu xanh lá"*, *"Màu xanh dương"*, *"Ánh sáng ấm"*... | **Chuyển trực tiếp sang màu tương ứng** |
 
 ---
 
