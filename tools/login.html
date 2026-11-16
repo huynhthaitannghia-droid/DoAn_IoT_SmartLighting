@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Đăng nhập · Đèn thông minh</title>
+    <style>
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #f8fafc; font: 1rem system-ui, sans-serif; }
+        main { width: min(24rem, calc(100% - 3rem)); padding: 1.5rem; box-sizing: border-box; background: #1e293b; border: 1px solid #334155; border-radius: 1rem; }
+        h1 { margin: 0; font-size: 1.5rem; }
+        p { color: #cbd5e1; }
+        input, button { display: block; width: 100%; box-sizing: border-box; margin: .5rem 0 1rem; padding: .75rem; border-radius: .5rem; font: inherit; }
+        input { border: 1px solid #64748b; background: #0f172a; color: #f8fafc; }
+        button { border: 0; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; }
+        #error { color: #fca5a5; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Đăng nhập dashboard nội bộ</h1>
+        <p>Dùng mật khẩu hiển thị khi khởi động broker, hoặc mật khẩu bạn đã cấu hình.</p>
+        <p id="error" role="alert" hidden></p>
+        <form method="post" action="/login">
+            <label for="password">Mật khẩu</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button type="submit">Đăng nhập</button>
+        </form>
+    </main>
+    <script>
+        const code = new URLSearchParams(location.search).get('error');
+        const error = document.getElementById('error');
+        if (code === 'password' || code === 'limit') {
+            error.hidden = false;
+            error.textContent = code === 'limit' ? 'Bạn đã thử quá nhiều lần. Đợi một phút rồi thử lại.' : 'Mật khẩu chưa đúng.';
+        }
+    </script>
+</body>
+</html>

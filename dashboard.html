@@ -4,11 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hệ Thống Đèn Thông Minh IoT - Nhóm 15</title>
-    <!-- Thư viện MQTT WebSocket -->
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-    <!-- Thư viện Google MediaPipe Hands cho AI Camera -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <style>
         :root {
             --primary: #4361ee;
@@ -476,6 +471,17 @@
             line-height: 1.4;
         }
 
+        .history-list {
+            margin: 0;
+            padding-inline-start: 2.5rem;
+            list-style-position: outside;
+            overflow-wrap: anywhere;
+        }
+
+        .history-list li + li {
+            margin-top: 4px;
+        }
+
         footer {
             margin-top: 20px;
             font-size: 0.82rem;
@@ -493,6 +499,9 @@
             <div class="dot" id="mqttDot"></div>
             <span id="mqttStatusText">Đang kết nối MQTT Broker...</span>
         </div>
+        <form id="logoutForm" method="post" action="/logout" hidden style="margin-top: 8px;">
+            <button type="submit" class="chip">Đăng xuất</button>
+        </form>
     </header>
 
     <div class="container">
@@ -540,6 +549,10 @@
                 <button class="btn-on" onclick="sendSimpleCmd('ON')">BẬT ĐÈN</button>
                 <button class="btn-off" onclick="sendSimpleCmd('OFF')">TẮT ĐÈN</button>
             </div>
+            <section id="latencyPanel" hidden style="margin: 8px 0 12px;">
+                <button type="button" class="chip" id="latencyTestButton" onclick="runLatencyTest()">Đo 20 lần bật/tắt</button>
+                <p id="latencyResult" role="status" style="margin-top: 6px; font-size: 0.85rem;">Bấm BẬT hoặc TẮT để đo phản hồi từ ESP32.</p>
+            </section>
 
             <div class="control-row">
                 <label id="brightLabelTitle"><span>Độ sáng (Dimming):</span> <span id="brightVal" style="font-weight:bold; color:#38bdf8;">70%</span></label>
@@ -640,6 +653,11 @@
             <div class="log-box" id="voiceLog">
                 Đang chờ lệnh điều khiển...
             </div>
+            <section id="historyPanel" hidden style="margin-top: 12px;">
+                <h2 style="font-size: 1rem;">Lịch sử bật/tắt đèn</h2>
+                <p id="historyStatus" role="status">Đang tải lịch sử...</p>
+                <ol class="log-box history-list" id="historyEntries"></ol>
+            </section>
         </div>
 
     </div>
@@ -650,27 +668,59 @@
     </footer>
 
     <script>
-        const MQTT_BROKER = "wss://broker.hivemq.com:8884/mqtt";
+        const localMqtt = location.pathname === '/local.html';
+        const MQTT_BROKER = localMqtt ? `ws://${location.host}/mqtt` : 'wss://broker.hivemq.com:8884/mqtt';
         const TOPIC_CONTROL = "nhom15/smartlight/control";
         const TOPIC_STATUS  = "nhom15/smartlight/status";
+        const TOPIC_ACK = "nhom15/smartlight/ack";
+        const LATENCY_TARGET_MS = 200;
+        const LATENCY_TIMEOUT_MS = 2500;
+        let latencyReady = false;
+        let pendingLatency = null;
+        let runningLatencyTest = false;
 
         let client = null;
         let isLightOn = true;
         let currentBrightness = 70;
         let currentColor = { r: 255, g: 180, b: 50 };
 
-        function initMQTT() {
+        function loadScript(url) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = url;
+                script.onload = resolve;
+                script.onerror = () => {
+                    script.remove();
+                    reject(new Error(`Không tải được ${url}`));
+                };
+                document.head.appendChild(script);
+            });
+        }
+
+        async function initMQTT() {
+            const statusText = document.getElementById('mqttStatusText');
+            try {
+                await loadScript(localMqtt ? '/mqtt.min.js' : 'https://unpkg.com/mqtt/dist/mqtt.min.js');
+            } catch (error) {
+                statusText.textContent = 'Không tải được thư viện MQTT. Hãy tải lại trang.';
+                console.error(error);
+                return;
+            }
             const clientId = "WebDashboard_Nhom15_" + Math.random().toString(16).substring(2, 8);
             client = mqtt.connect(MQTT_BROKER, { clientId: clientId });
 
             client.on('connect', () => {
                 document.getElementById('mqttDot').classList.add('connected');
-                document.getElementById('mqttStatusText').textContent = "Đã kết nối Broker MQTT (Sẵn sàng điều khiển Wokwi)";
-                client.subscribe(TOPIC_STATUS);
+                statusText.textContent = localMqtt ? 'Đã kết nối broker MQTT nội bộ' : 'Đã kết nối broker HiveMQ';
+                client.subscribe(localMqtt ? [TOPIC_STATUS, TOPIC_ACK] : TOPIC_STATUS, (error, grants) => {
+                    latencyReady = localMqtt && !error && Boolean(grants?.some(grant => grant.topic === TOPIC_ACK && grant.qos < 128));
+                });
             });
 
             client.on('message', (topic, message) => {
-                if (topic === TOPIC_STATUS) {
+                if (localMqtt && topic === TOPIC_ACK) {
+                    try { receiveLatencyAck(JSON.parse(message.toString())); } catch (e) {}
+                } else if (topic === TOPIC_STATUS) {
                     try {
                         const data = JSON.parse(message.toString());
                         updateUI(data);
@@ -678,10 +728,14 @@
                 }
             });
 
-            client.on('error', () => {
+            const showDisconnected = () => {
+                latencyReady = false;
+                finishLatency({ error: 'Mất kết nối broker MQTT.' });
                 document.getElementById('mqttDot').classList.remove('connected');
-                document.getElementById('mqttStatusText').textContent = "Mất kết nối MQTT Broker!";
-            });
+                statusText.textContent = 'Mất kết nối broker MQTT';
+            };
+            client.on('close', showDisconnected);
+            client.on('error', showDisconnected);
         }
 
         function updateUI(data) {
@@ -756,7 +810,78 @@
             }
         }
 
-        function sendSimpleCmd(cmd) {
+        function finishLatency(result) {
+            if (!pendingLatency) return;
+            const measurement = pendingLatency;
+            pendingLatency = null;
+            clearTimeout(measurement.timeout);
+            measurement.resolve(result);
+        }
+
+        function receiveLatencyAck(ack) {
+            if (!pendingLatency || ack?.commandId !== pendingLatency.id) return;
+            if (ack.state !== pendingLatency.state) {
+                finishLatency({ error: 'ESP32 phản hồi với trạng thái khác lệnh đã gửi.' });
+                return;
+            }
+            finishLatency({ elapsed: performance.now() - pendingLatency.startedAt });
+        }
+
+        function measureLightCommand(state) {
+            if (!client?.connected || !latencyReady) return Promise.resolve({ error: 'Đang chờ kết nối broker MQTT.' });
+
+            const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), byte => byte.toString(16).padStart(2, '0')).join('');
+            return new Promise(resolve => {
+                const timeout = setTimeout(() => finishLatency({ error: 'ESP32 chưa xác nhận sau 2,5 giây.' }), LATENCY_TIMEOUT_MS);
+                pendingLatency = { id, state, startedAt: performance.now(), timeout, resolve };
+                client.publish(TOPIC_CONTROL, JSON.stringify({ state, commandId: id }), error => {
+                    if (error && pendingLatency?.id === id) finishLatency({ error: 'Không gửi được lệnh MQTT.' });
+                });
+                logMessage('>> Gửi lệnh App: ' + state);
+            });
+        }
+
+        async function runLatencyTest() {
+            if (runningLatencyTest || pendingLatency) return;
+            runningLatencyTest = true;
+            const button = document.getElementById('latencyTestButton');
+            const output = document.getElementById('latencyResult');
+            button.disabled = true;
+            const samples = [];
+            let errorMessage = '';
+            let state = isLightOn ? 'OFF' : 'ON';
+            try {
+                for (let index = 0; index < 20; index++) {
+                    output.textContent = `Đang đo lần ${index + 1}/20…`;
+                    const result = await measureLightCommand(state);
+                    if (result.error) {
+                        errorMessage = result.error;
+                        break;
+                    }
+                    samples.push(result.elapsed);
+                    state = state === 'ON' ? 'OFF' : 'ON';
+                    if (index < 19) await new Promise(resolve => setTimeout(resolve, 150));
+                }
+
+                const belowTarget = samples.filter(ms => ms < LATENCY_TARGET_MS).length;
+                const average = samples.length ? (samples.reduce((sum, ms) => sum + ms, 0) / samples.length).toFixed(1) : null;
+                const averageLabel = average === null ? '' : ` · trung bình ${average} ms`;
+                output.textContent = `${samples.length}/20 lần có xác nhận · ${belowTarget} lần dưới 200 ms${averageLabel}${errorMessage ? ` · ${errorMessage}` : ''}`;
+            } finally {
+                runningLatencyTest = false;
+                button.disabled = false;
+            }
+        }
+
+        async function sendSimpleCmd(cmd) {
+            if (localMqtt) {
+                if (runningLatencyTest || pendingLatency) return;
+                const output = document.getElementById('latencyResult');
+                output.textContent = 'Đang chờ ESP32 xác nhận…';
+                const result = await measureLightCommand(cmd);
+                output.textContent = result.error || `ESP32 xác nhận sau ${result.elapsed.toFixed(1)} ms`;
+                return;
+            }
             if (cmd === "ON") {
                 isLightOn = true;
                 if (currentBrightness === 0) currentBrightness = 70;
@@ -922,9 +1047,11 @@
 
             if (!isCameraActive) {
                 camBtn.innerHTML = "⏳ Đang tải AI MediaPipe...";
-                if (!hands) initMediaPipe();
-
+                camBtn.disabled = true;
                 try {
+                    if (!window.Camera) await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
+                    if (!window.Hands) await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js');
+                    if (!hands) initMediaPipe();
                     camera = new Camera(videoElement, {
                         onFrame: async () => {
                             if (isCameraActive) {
@@ -943,8 +1070,10 @@
                     indicator.style.display = "flex";
                     logMessage("📷 Đã bật Camera AI nhận diện cử chỉ!");
                 } catch (err) {
-                    alert("Không thể mở Webcam: " + err.message);
+                    alert("Không thể bật Camera AI: " + err.message);
                     camBtn.innerHTML = "📹 BẬT CAMERA NHẬN DIỆN TAY";
+                } finally {
+                    camBtn.disabled = false;
                 }
             } else {
                 if (camera) {
@@ -1244,9 +1373,43 @@
             }
         }
 
+        async function refreshLightHistory() {
+            const list = document.getElementById('historyEntries');
+            const message = document.getElementById('historyStatus');
+            try {
+                const response = await fetch('/api/history', { signal: AbortSignal.timeout(2500) });
+                if (response.status === 401) {
+                    location.replace('/login.html');
+                    return;
+                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const entries = await response.json();
+                list.replaceChildren(...entries.map(entry => {
+                    const item = document.createElement('li');
+                    const time = new Date(entry.recorded_at).toLocaleString('vi-VN');
+                    const state = entry.state === 'ON' ? 'Bật' : 'Tắt';
+                    const source = entry.source || 'Chưa rõ nguồn';
+                    const initial = entry.initial ? ' · trạng thái ban đầu' : '';
+                    item.textContent = `${time} · ${state} · ${source}${initial}`;
+                    return item;
+                }));
+                list.hidden = entries.length === 0;
+                message.textContent = entries.length ? '' : 'Chưa nhận được trạng thái từ ESP32.';
+            } catch {
+                message.textContent = 'Chưa tải được lịch sử. Dashboard sẽ tự thử lại.';
+            }
+        }
+
         window.onload = () => {
             initMQTT();
             initSpeech();
+            if (localMqtt) {
+                document.getElementById('logoutForm').hidden = false;
+                document.getElementById('latencyPanel').hidden = false;
+                document.getElementById('historyPanel').hidden = false;
+                refreshLightHistory();
+                setInterval(refreshLightHistory, 3000);
+            }
         };
     </script>
 </body>

@@ -61,6 +61,17 @@ Hệ thống **AIoT Smart Lighting** là giải pháp chiếu sáng thông minh 
 
 ---
 
+## Khác biệt với cấu hình tham chiếu của đề kiểm tra
+
+| Hạng mục | Đề kiểm tra | Bản mô phỏng hiện tại |
+|---|---|---|
+| Cử chỉ | Cảm biến APDS-9960 qua I²C | Camera và MediaPipe trên dashboard. Nút GPIO 12 tạo lệnh cử chỉ cục bộ để kiểm tra firmware. |
+| Giọng nói | Micro INMP441 qua I²S | Web Speech API trên trình duyệt. Firmware có nhánh nhận mã lệnh UART dành cho Elechouse V3. |
+| Tải đèn | Relay/Triac điều khiển đèn 220 V | Vòng LED NeoPixel trên GPIO 18. |
+| Dịch vụ mạng | Kiến trúc Cloud theo đề | Broker HiveMQ công cộng. Backend riêng, xác thực và cơ sở dữ liệu lịch sử là phần mở rộng. |
+
+Ở câu 2A, phương án lọc nhiễu quang từ đèn huỳnh quang áp dụng cho APDS-9960 theo giả thiết của đề. Bản Wokwi dùng nút GPIO 12 để minh họa lọc dội và loại xung ngắn trong firmware. Kiểm thử nhiễu quang cần thực hiện trên APDS-9960 thật.
+
 ## 🔌 Sơ đồ đấu nối phần cứng (Wokwi Simulation)
 
 | Linh kiện | Chân linh kiện | Chân kết nối ESP32 | Ghi chú |
@@ -117,6 +128,37 @@ Hệ thống **AIoT Smart Lighting** là giải pháp chiếu sáng thông minh 
 - Web Dashboard sẽ tự động kết nối vào MQTT Broker `broker.hivemq.com` và đồng bộ tức thời với ESP32!
 
 ---
+
+### 3. Demo broker MQTT nội bộ (câu 2B)
+
+Trong thư mục dự án, chạy `npm.cmd ci` một lần để cài thư viện qua Internet. Sau đó chạy `npm.cmd run broker` và giữ terminal này mở. Broker lắng nghe MQTT TCP trên `127.0.0.1:1883`, còn dashboard và MQTT WebSocket dùng cổng `8080`.
+
+1. Mở dashboard tại `http://127.0.0.1:8080/` và đăng nhập bằng mật khẩu in khi khởi động broker. Trang này tải thư viện MQTT từ máy chạy broker.
+2. Build firmware, khởi động Wokwi trong VS Code và gõ `MQTT LOCAL` trong Serial Monitor. ESP32 dùng `host.wokwi.internal:1883` qua Wokwi IoT Gateway. Nếu trước đó đã gõ `MQTT OFF`, gõ thêm `MQTT ON`.
+3. Chờ log `THANH CONG!` sau dòng kết nối đến `host.wokwi.internal`. Bấm **BẬT ĐÈN** và **TẮT ĐÈN** trên dashboard, quan sát vòng LED trong Wokwi.
+4. Sau khi bản demo hoạt động, có thể thử ngắt đường Internet ở router nhưng giữ Wi-Fi/LAN và broker đang chạy. Chế độ khởi động Wokwi hoàn toàn offline yêu cầu gói Pro. [Wokwi Offline](https://docs.wokwi.com/vscode/offline-mode)
+
+Dashboard và broker TCP của bản demo chỉ nghe trên loopback. Wokwi kết nối qua gateway trên cùng máy.
+
+Các nút web và điều khiển độ sáng hoạt động với broker nội bộ. Camera hiện tải MediaPipe từ CDN khi bật lần đầu và nhận diện giọng nói vẫn tùy dịch vụ của trình duyệt. Để trở về luồng HiveMQ, gõ `MQTT PUBLIC` và mở lại trang `dashboard.html` qua Live Server.
+
+### 4. Xem lịch sử bật/tắt đèn (câu 2C)
+
+Chạy broker nội bộ bằng Node.js 24 và giữ ESP32 ở chế độ `MQTT LOCAL`. Mở dashboard nội bộ, bấm **BẬT ĐÈN** và **TẮT ĐÈN**, rồi xem mục **Lịch sử bật/tắt đèn** bên dưới nhật ký hoạt động. Danh sách tự cập nhật mỗi 3 giây và hiện tối đa 20 bản ghi mới nhất.
+
+Backend lưu trạng thái ban đầu và các lần chuyển `ON`/`OFF` nhận được từ topic trạng thái vào `data/smartlight-history.sqlite`. Thời gian hiển thị là lúc backend nhận bản tin. File được giữ khi khởi động lại broker. Những thay đổi diễn ra lúc ESP32 ngắt broker có thể không được ghi vì firmware chỉ đồng bộ trạng thái mới nhất khi kết nối lại.
+
+### 5. Đo độ trễ phản hồi ESP32 (câu 2C)
+
+Build và nạp firmware mới, chuyển sang `MQTT LOCAL` rồi mở dashboard nội bộ. Bấm **BẬT ĐÈN** hoặc **TẮT ĐÈN** để đo một lần, hoặc chọn **Đo 20 lần bật/tắt** để chạy các lệnh luân phiên. Dashboard hiển thị số lần được xác nhận, số mẫu dưới 200 ms và trung bình của các mẫu đã nhận. Nếu mất kết nối hoặc một lệnh quá 2,5 giây chưa có xác nhận, lượt đo kết thúc và hiển thị lý do.
+
+Dashboard gắn `commandId` cho từng lệnh. ESP32 phản hồi mã lệnh và trạng thái trên `nhom15/smartlight/ack` sau khi cập nhật LED. Dashboard dùng `performance.now()` để đo từ lúc gửi đến lúc nhận đúng xác nhận. Chỉ số này là độ trễ khứ hồi qua MQTT, bao gồm thời gian xử lý ở ESP32.
+
+### 6. Đăng nhập dashboard nội bộ (câu 2C)
+
+Chạy `npm.cmd ci` để cài thư viện JWT, rồi khởi động lại bằng `npm.cmd run broker`. Mật khẩu ngẫu nhiên xuất hiện trong terminal cho mỗi lần khởi động, trừ khi đặt biến môi trường `SMARTLIGHT_PASSWORD` trước khi chạy. Không đưa mật khẩu vào ảnh demo hoặc mã nguồn.
+
+Sau khi đăng nhập, trình duyệt nhận JWT trong cookie HttpOnly, hết hạn sau 30 phút. Backend kiểm tra phiên khi mở dashboard, đọc lịch sử và bắt đầu kết nối MQTT WebSocket. Đăng xuất hủy phiên và đóng kết nối WebSocket của phiên đó. Dashboard được gửi lệnh điều khiển và đọc trạng thái/xác nhận. ESP32 được nhận lệnh và gửi trạng thái/xác nhận qua cổng TCP loopback. Đây là xác thực cục bộ bằng JWT; nhà cung cấp OAuth2, TLS 1.3 và xác thực riêng cho thiết bị là các phần triển khai tiếp theo.
 
 ## 📡 MQTT Topics
 

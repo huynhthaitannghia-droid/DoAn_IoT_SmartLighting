@@ -2,6 +2,8 @@
 .pio/
 .pioenvs/
 .piolibdeps/
+node_modules/
+data/smartlight-history.sqlite*
 
 # Editor / IDE settings
 .vscode/

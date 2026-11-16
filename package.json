@@ -1,0 +1,14 @@
+{
+  "name": "smartlight-local",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "broker": "node tools/local-broker.cjs"
+  },
+  "dependencies": {
+    "aedes": "0.51.3",
+    "jose": "6.2.0",
+    "mqtt": "5.10.4",
+    "ws": "8.18.3"
+  }
+}

@@ -3,6 +3,7 @@
 #include <PubSubClient.h>
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
+#include <atomic>
 
 // ==============================================================================
 // ĐỒ ÁN MÔN HỌC: INTERNET OF THINGS (IoT)
@@ -26,14 +27,39 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 // Cấu hình Wi-Fi & MQTT Broker
 const char* ssid        = "Wokwi-GUEST";
 const char* password    = "";
-const char* mqtt_server = "broker.hivemq.com";
+const char* publicMqttHost = "broker.hivemq.com";
+const char* localMqttHost = "host.wokwi.internal";
 const int   mqtt_port   = 1883;
 
 const char* topic_control = "nhom15/smartlight/control";
 const char* topic_status  = "nhom15/smartlight/status";
+const char* topic_ack     = "nhom15/smartlight/ack";
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+const unsigned long MQTT_RETRY_INTERVAL_MS = 3000;
+const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 1;
+const size_t MQTT_STATUS_BUFFER_SIZE = 320;
+
+struct MqttCommand {
+    char payload[MQTT_MAX_PACKET_SIZE];
+};
+
+struct MqttStatus {
+    char payload[MQTT_STATUS_BUFFER_SIZE];
+};
+
+struct MqttAck {
+    char commandId[48];
+    bool lightOn;
+};
+
+QueueHandle_t mqttCommands = nullptr;
+QueueHandle_t mqttStatus = nullptr;
+QueueHandle_t mqttAcks = nullptr;
+std::atomic<bool> mqttNeedsStatus{false};
+std::atomic<bool> mqttEnabledForTest{true};
+std::atomic<bool> useLocalMqtt{false};
 
 // ------------------------------------------------------------------------------
 // 2. MÔ HÌNH PHÂN CẤP ƯU TIÊN & XỬ LÝ XUNG ĐỘT (THEO CHƯƠNG 4.3 BÁO CÁO)
@@ -86,7 +112,8 @@ const unsigned long LDR_CHECK_INTERVAL = 1000;
 int lastLdrState = -1; // 0: Đủ sáng, 1: Tối
 
 // Biến chống dội nút bấm cử chỉ Wokwi
-int lastButtonState = HIGH;
+int lastButtonReading = HIGH;
+int stableButtonState = HIGH;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 200;
 
@@ -115,13 +142,13 @@ void rotateColor() {
     colorG = PALETTE[currentPaletteIndex][1];
     colorB = PALETTE[currentPaletteIndex][2];
     lightState = true;
-    Serial.printf("[CỬ CHỈ XOAY TAY]: Chuyển sang màu palette #%d: RGB(%d, %d, %d)\n", 
+    Serial.printf("[CỬ CHỈ XOAY TAY]: Chuyển sang màu palette #%d: RGB(%d, %d, %d)\r\n",
                   currentPaletteIndex, colorR, colorG, colorB);
 }
 
-// Báo cáo trạng thái đèn lên MQTT Broker
+// Chụp trạng thái trên vòng điều khiển để tác vụ MQTT gửi sau.
 void publishStatus(const char* conflictMsg = "") {
-    if (!mqttClient.connected()) return;
+    if (!mqttStatus) return;
 
     JsonDocument doc;
     doc["state"]       = lightState ? "ON" : "OFF";
@@ -137,9 +164,9 @@ void publishStatus(const char* conflictMsg = "") {
         doc["conflict"] = conflictMsg;
     }
 
-    char buffer[320];
-    serializeJson(doc, buffer);
-    mqttClient.publish(topic_status, buffer);
+    MqttStatus status{};
+    serializeJson(doc, status.payload);
+    xQueueOverwrite(mqttStatus, &status);
 }
 
 // ------------------------------------------------------------------------------
@@ -148,7 +175,7 @@ void publishStatus(const char* conflictMsg = "") {
 bool requestExecution(PriorityLevel priority, const char* sourceName) {
     // Trường hợp 1: Đang có lệnh Khóa Khẩn Cấp từ App (Ưu tiên 1)
     if (emergencyLock && priority > PRIORITY_APP_EMERGENCY) {
-        Serial.printf("\n[XUNG ĐỘT BỊ CHẶN] Lệnh từ [%s] (Mức %d) bị TỪ CHỐI vì hệ thống đang BỊ KHÓA KHẨN CẤP bởi App!\n", 
+        Serial.printf("[XUNG ĐỘT BỊ CHẶN] Lệnh từ [%s] (Mức %d) bị TỪ CHỐI vì hệ thống đang BỊ KHÓA KHẨN CẤP bởi App!\r\n",
                       sourceName, priority);
         publishStatus("BỊ CHẶN: ĐANG KHÓA KHẨN CẤP");
         return false;
@@ -166,7 +193,7 @@ bool requestExecution(PriorityLevel priority, const char* sourceName) {
     if (priority <= PRIORITY_GESTURE) {
         lastManualActionTime = millis();
     }
-    Serial.printf("\n[CHẤP THUẬN LỆNH] Nguồn: [%s] | Mức ưu tiên: %d\n", sourceName, priority);
+    Serial.printf("[CHẤP THUẬN LỆNH] Nguồn: [%s] | Mức ưu tiên: %d\r\n", sourceName, priority);
     return true;
 }
 
@@ -186,11 +213,11 @@ void executeCommand(String cmd, PriorityLevel priority, const char* source) {
             // Xử lý cờ khóa khẩn cấp (Ưu tiên 1)
             if (doc["emergency"].is<bool>()) {
                 emergencyLock = doc["emergency"].as<bool>();
-                Serial.printf("[HỆ THỐNG]: Trạng thái Khóa Khẩn Cấp = %s\n", emergencyLock ? "BẬT" : "TẮT");
+                Serial.printf("[HỆ THỐNG]: Trạng thái Khóa Khẩn Cấp = %s\r\n", emergencyLock ? "BẬT" : "TẮT");
             }
             if (doc["auto_ldr"].is<bool>()) {
                 autoLdrEnabled = doc["auto_ldr"].as<bool>();
-                Serial.printf("[HỆ THỐNG]: Tự động cảm biến LDR = %s\n", autoLdrEnabled ? "BẬT" : "TẮT");
+                Serial.printf("[HỆ THỐNG]: Tự động cảm biến LDR = %s\r\n", autoLdrEnabled ? "BẬT" : "TẮT");
             }
             if (doc["state"].is<String>()) {
                 String st = doc["state"].as<String>();
@@ -251,6 +278,13 @@ void executeCommand(String cmd, PriorityLevel priority, const char* source) {
             }
             updateLEDs();
             publishStatus();
+            const char* commandId = doc["commandId"].as<const char*>();
+            if (mqttAcks && commandId && commandId[0] != '\0' && strlen(commandId) < sizeof(MqttAck::commandId)) {
+                MqttAck ack{};
+                strcpy(ack.commandId, commandId);
+                ack.lightOn = lightState;
+                xQueueSend(mqttAcks, &ack, 0);
+            }
             return;
         }
     }
@@ -339,32 +373,30 @@ void handleLdrSensor() {
     // Sử dụng thuật toán trễ (Hysteresis) để tránh bật/tắt chập chờn ở ngưỡng biên
     // Tối: rawValue > 2500 -> Bật đèn
     // Sáng: rawValue < 1500 -> Tắt đèn
-    if (rawValue > 2500 && lastLdrState != 1) {
-        if (requestExecution(PRIORITY_AUTO, "CẢM BIẾN ÁNH SÁNG LDR (TRỜI TỐI)")) {
-            Serial.printf("[TỰ ĐỘNG HÓA]: Phát hiện trời tối (ADC: %d) -> Tự động BẬT đèn!\n", rawValue);
-            lightState = true;
-            lastLdrState = 1;
-            updateLEDs();
-            publishStatus();
-        }
-    } else if (rawValue < 1500 && lastLdrState != 0) {
-        if (requestExecution(PRIORITY_AUTO, "CẢM BIẾN ÁNH SÁNG LDR (TRỜI SÁNG)")) {
-            Serial.printf("[TỰ ĐỘNG HÓA]: Phát hiện trời sáng (ADC: %d) -> Tự động TẮT đèn tiết kiệm điện!\n", rawValue);
-            lightState = false;
-            lastLdrState = 0;
-            updateLEDs();
-            publishStatus();
-        }
+    if (rawValue > 2500) lastLdrState = 1;
+    else if (rawValue < 1500) lastLdrState = 0;
+
+    if (lastLdrState < 0 || emergencyLock) return;
+    const bool shouldTurnOn = lastLdrState == 1;
+    if (lightState == shouldTurnOn && (!shouldTurnOn || brightnessPercent > 0)) return;
+
+    executeCommand(shouldTurnOn ? "ON" : "OFF", PRIORITY_AUTO,
+                   shouldTurnOn ? "CẢM BIẾN ÁNH SÁNG LDR (TRỜI TỐI)"
+                                : "CẢM BIẾN ÁNH SÁNG LDR (TRỜI SÁNG)");
+}
+
+// MQTT chỉ đưa bản tin vào hàng đợi. Vòng điều khiển thực thi lệnh.
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    if (strcmp(topic, topic_control) != 0 || length == 0 || length >= MQTT_MAX_PACKET_SIZE) return;
+
+    MqttCommand command{};
+    memcpy(command.payload, payload, length);
+    if (xQueueSend(mqttCommands, &command, 0) != pdPASS) {
+        Serial.println("Hang doi MQTT day, bo qua lenh moi.");
     }
 }
 
-// Callback khi nhận tin từ MQTT
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    String message = "";
-    for (unsigned int i = 0; i < length; i++) {
-        message += (char)payload[i];
-    }
-
+void handleMqttCommand(const String& message) {
     // Phân loại nguồn dựa vào nội dung hoặc mặc định
     PriorityLevel prio = PRIORITY_APP_EMERGENCY;
     String source = "APP_DI_DONG";
@@ -387,19 +419,87 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 // Quản lý kết nối MQTT
-void reconnectMQTT() {
-    while (!mqttClient.connected()) {
-        Serial.print("Dang ket noi MQTT Broker (broker.hivemq.com)... ");
-        String clientId = "ESP32_SmartLight_Nhom15_" + String(random(0xffff), HEX);
-        if (mqttClient.connect(clientId.c_str())) {
-            Serial.println("THANH CONG!");
-            mqttClient.subscribe(topic_control);
-            Serial.printf("Da lang nghe topic: %s\n", topic_control);
-            publishStatus();
-        } else {
-            Serial.printf("That bai (rc=%d). Thu lai sau 3s...\n", mqttClient.state());
-            delay(3000);
+void serviceMQTT(unsigned long& lastAttempt, const char* host, bool local) {
+    if (WiFi.status() != WL_CONNECTED) return;
+    if (mqttClient.connected()) {
+        mqttClient.loop();
+        MqttStatus status;
+        if (mqttClient.connected() && xQueueReceive(mqttStatus, &status, 0) == pdPASS) {
+            if (!mqttClient.publish(topic_status, status.payload, local)) espClient.stop();
         }
+        MqttAck ack;
+        if (mqttClient.connected() && xQueueReceive(mqttAcks, &ack, 0) == pdPASS) {
+            JsonDocument doc;
+            doc["commandId"] = ack.commandId;
+            doc["state"] = ack.lightOn ? "ON" : "OFF";
+            char payload[MQTT_STATUS_BUFFER_SIZE];
+            serializeJson(doc, payload);
+            if (!mqttClient.publish(topic_ack, payload)) espClient.stop();
+        }
+        return;
+    }
+    if (millis() - lastAttempt < MQTT_RETRY_INTERVAL_MS) return;
+
+    Serial.printf("Dang ket noi MQTT Broker (%s)... ", host);
+    String clientId = "ESP32_SmartLight_Nhom15_" + String(random(0xffff), HEX);
+    if (mqttClient.connect(clientId.c_str()) && mqttClient.subscribe(topic_control)) {
+        Serial.println("THANH CONG!");
+        Serial.printf("Da lang nghe topic: %s\r\n", topic_control);
+        mqttNeedsStatus.store(true);
+    } else {
+        Serial.printf("That bai (rc=%d). Thu lai sau 3s...\r\n", mqttClient.state());
+        espClient.stop();
+    }
+    lastAttempt = millis();
+}
+
+void mqttTask(void*) {
+    unsigned long lastAttempt = millis() - MQTT_RETRY_INTERVAL_MS;
+    bool enabled = true;
+    bool local = false;
+    const char* host = publicMqttHost;
+    for (;;) {
+        const bool requestedLocal = useLocalMqtt.load();
+        if (requestedLocal != local) {
+            local = requestedLocal;
+            host = local ? localMqttHost : publicMqttHost;
+            mqttClient.disconnect();
+            mqttClient.setServer(host, mqtt_port);
+            xQueueReset(mqttCommands);
+            xQueueReset(mqttAcks);
+            lastAttempt = millis() - MQTT_RETRY_INTERVAL_MS;
+            Serial.printf("[MQTT] Broker da chon: %s\r\n", host);
+        }
+        const bool requested = mqttEnabledForTest.load();
+        if (requested != enabled) {
+            enabled = requested;
+            if (enabled) {
+                lastAttempt = millis() - MQTT_RETRY_INTERVAL_MS;
+                Serial.println("[TEST MQTT] Da bat thu ket noi lai.");
+            } else {
+                mqttClient.disconnect();
+                xQueueReset(mqttCommands);
+                xQueueReset(mqttAcks);
+                Serial.println("[TEST MQTT] Da ngat MQTT va tam dung ket noi lai.");
+            }
+        }
+        if (enabled) serviceMQTT(lastAttempt, host, local);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void handleSerialCommand(String input) {
+    input.trim();
+    if (input.equalsIgnoreCase("MQTT OFF")) {
+        mqttEnabledForTest.store(false);
+    } else if (input.equalsIgnoreCase("MQTT ON")) {
+        mqttEnabledForTest.store(true);
+    } else if (input.equalsIgnoreCase("MQTT LOCAL")) {
+        useLocalMqtt.store(true);
+    } else if (input.equalsIgnoreCase("MQTT PUBLIC")) {
+        useLocalMqtt.store(false);
+    } else if (input.length() > 0) {
+        executeCommand(input, PRIORITY_VOICE, "SERIAL_KEYBOARD");
     }
 }
 
@@ -412,7 +512,8 @@ void setup() {
     Serial2.begin(9600, SERIAL_8N1, VOICE_RX2_PIN, VOICE_TX2_PIN);
 
     delay(300);
-    Serial.println("\n==================================================================");
+    Serial.println();
+    Serial.println("==================================================================");
     Serial.println("  HỆ THỐNG ĐÈN THÔNG MINH QUA GIỌNG NÓI & CỬ CHỈ - NHÓM 15       ");
     Serial.println("  Cấu hình: ESP32 + WS2812B + LDR + Voice (UART) + Gesture (I2C) ");
     Serial.println("==================================================================");
@@ -427,51 +528,57 @@ void setup() {
     updateLEDs();
 
     // Kết nối Wi-Fi Wokwi
-    Serial.printf("Ket noi Wi-Fi [%s]...\n", ssid);
+    Serial.printf("Bat dau ket noi Wi-Fi [%s]\r\n", ssid);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
     WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(250);
-        Serial.print(".");
-    }
-    Serial.println("\nWi-Fi DA KET NOI! IP: " + WiFi.localIP().toString());
 
-    // Cấu hình MQTT
-    mqttClient.setServer(mqtt_server, mqtt_port);
+    // Tách I/O mạng khỏi vòng đọc nút, LDR và điều khiển đèn.
+    mqttCommands = xQueueCreate(8, sizeof(MqttCommand));
+    mqttStatus = xQueueCreate(1, sizeof(MqttStatus));
+    mqttAcks = xQueueCreate(8, sizeof(MqttAck));
+    espClient.setTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+    mqttClient.setBufferSize(MQTT_STATUS_BUFFER_SIZE + 5 + 2 + strlen(topic_status));
+    mqttClient.setSocketTimeout(MQTT_SOCKET_TIMEOUT_SECONDS);
+    mqttClient.setServer(publicMqttHost, mqtt_port);
     mqttClient.setCallback(mqttCallback);
+    if (!mqttCommands || !mqttStatus || !mqttAcks ||
+        xTaskCreate(mqttTask, "mqtt", 4096, nullptr, 1, nullptr) != pdPASS) {
+        Serial.println("Khong khoi tao duoc tac vu MQTT. Dieu khien cuc bo van hoat dong.");
+    }
 
-    Serial.println("\n[SẴN SÀNG THỬ NGHIỆM]:");
+    Serial.println();
+    Serial.println("[SẴN SÀNG THỬ NGHIỆM]:");
     Serial.println(" 1. Web Dashboard: Bật/Tắt, Giọng nói tiếng Việt, Cử chỉ.");
     Serial.println(" 2. Wokwi LDR: Kéo thanh trượt ánh sáng để xem đèn tự động bật khi trời tối.");
     Serial.println(" 3. Wokwi Nút bấm GPIO 12: Nhấn để mô phỏng cử chỉ xoay tay đổi màu.");
-    Serial.println("==================================================================\n");
+    Serial.println(" 4. Serial Monitor: MQTT OFF / MQTT ON de thu ngat va noi lai broker.");
+    Serial.println(" 5. Serial Monitor: MQTT LOCAL / MQTT PUBLIC de chon broker.");
+    Serial.println("==================================================================");
+    Serial.println();
 }
 
 void loop() {
-    // 1. Quản lý MQTT
-    if (!mqttClient.connected()) {
-        reconnectMQTT();
-    }
-    mqttClient.loop();
-
-    // 2. Cảm biến ánh sáng tự động LDR (Ưu tiên 4)
+    // Cảm biến ánh sáng tự động LDR (Ưu tiên 4)
     handleLdrSensor();
 
-    // 3. Đọc nút bấm cử chỉ vật lý trên Wokwi (GPIO 12) -> Xoay tay đổi màu
-    int reading = digitalRead(GESTURE_PIN);
-    if (reading != lastButtonState) {
+    // Đọc nút Wokwi (GPIO 12) và chỉ thực thi ở cạnh nhấn đã ổn định.
+    const int reading = digitalRead(GESTURE_PIN);
+    if (reading != lastButtonReading) {
         lastDebounceTime = millis();
+        lastButtonReading = reading;
     }
-    if ((millis() - lastDebounceTime) > debounceDelay) {
-        if (reading == LOW && lastButtonState == HIGH) {
+    if (reading != stableButtonState && millis() - lastDebounceTime >= debounceDelay) {
+        stableButtonState = reading;
+        if (stableButtonState == LOW) {
             executeCommand("ROTATE", PRIORITY_GESTURE, "NÚT_CỬ_CHỈ_VẬT_LÝ");
         }
     }
-    lastButtonState = reading;
 
-    // 4. Lắng nghe UART phụ Serial2 (Module Elechouse V3)
+    // Lắng nghe UART phụ Serial2 (Module Elechouse V3)
     if (Serial2.available()) {
         byte voiceByte = Serial2.read();
-        Serial.printf("[UART ELECHOUSE V3]: Nhan ma lenh 0x%02X\n", voiceByte);
+        Serial.printf("[UART ELECHOUSE V3]: Nhan ma lenh 0x%02X\r\n", voiceByte);
         if (voiceByte == 0x11) executeCommand("ON", PRIORITY_VOICE, "ELECHOUSE_V3_UART");
         else if (voiceByte == 0x12) executeCommand("OFF", PRIORITY_VOICE, "ELECHOUSE_V3_UART");
         else if (voiceByte == 0x13) executeCommand("SWIPE_RIGHT", PRIORITY_VOICE, "ELECHOUSE_V3_UART");
@@ -479,12 +586,15 @@ void loop() {
         else if (voiceByte == 0x15) executeCommand("ROTATE", PRIORITY_VOICE, "ELECHOUSE_V3_UART");
     }
 
-    // 5. Lắng nghe lệnh gõ từ bàn phím Serial Monitor (Dự phòng khẩn cấp)
+    // Lắng nghe lệnh gõ từ bàn phím Serial Monitor (Dự phòng khẩn cấp)
     if (Serial.available()) {
-        String input = Serial.readStringUntil('\n');
-        input.trim();
-        if (input.length() > 0) {
-            executeCommand(input, PRIORITY_VOICE, "SERIAL_KEYBOARD");
-        }
+        handleSerialCommand(Serial.readStringUntil('\n'));
     }
+
+    if (mqttNeedsStatus.exchange(false)) publishStatus();
+    MqttCommand command;
+    if (mqttCommands && mqttEnabledForTest.load() && xQueueReceive(mqttCommands, &command, 0) == pdPASS) {
+        handleMqttCommand(command.payload);
+    }
+    delay(1);
 }

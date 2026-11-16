@@ -33,16 +33,16 @@
     }
   ],
   "connections": [
-    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
-    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
-    [ "esp:VIN", "ring:VCC", "red", [ "v35", "h240" ] ],
-    [ "esp:GND.1", "ring:GND", "black", [ "h30", "v-55" ] ],
-    [ "esp:D18", "ring:DIN", "green", [ "h0" ] ],
-    [ "esp:3V3", "ldr:VCC", "red", [ "h40", "v30" ] ],
-    [ "esp:GND.1", "ldr:GND", "black", [ "h20", "v55" ] ],
-    [ "esp:D34", "ldr:AO", "gold", [ "v-30", "h260" ] ],
-    [ "esp:GND.2", "btn_gesture:1.l", "black", [ "h-10" ] ],
-    [ "esp:D12", "btn_gesture:2.l", "blue", [ "h-20" ] ]
+    ["esp:TX0", "$serialMonitor:RX", "", []],
+    ["esp:RX0", "$serialMonitor:TX", "", []],
+    ["esp:VIN", "ring:VCC", "red", ["v35", "h240"]],
+    ["esp:GND.1", "ring:GND", "black", ["h30", "v-55"]],
+    ["esp:D18", "ring:DIN", "green", ["h0"]],
+    ["esp:3V3", "ldr:VCC", "red", ["h40", "v30"]],
+    ["esp:GND.1", "ldr:GND", "black", ["h20", "v55"]],
+    ["esp:D34", "ldr:AO", "gold", ["v-30", "h260"]],
+    ["esp:GND.2", "btn_gesture:1.l", "black", ["h-10"]],
+    ["esp:D12", "btn_gesture:2.l", "blue", ["h-20"]]
   ],
   "dependencies": {}
 }
